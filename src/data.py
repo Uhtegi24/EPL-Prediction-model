@@ -9,7 +9,6 @@ def _calculate_rolling_stats(matches, window=5):
     Internal helper to calculate rolling averages for teams.
     """
     # 1. Create a long view (one row per team per match)
-    # We need to know the result to calculate points
     cols_h = ["match_id", "date", "home_team", "shots_h", "shot_xg_sum_h", "shots_on_target_h", "home_goals", "away_goals"]
     cols_a = ["match_id", "date", "away_team", "shots_a", "shot_xg_sum_a", "shots_on_target_a", "home_goals", "away_goals"]
     
@@ -23,17 +22,20 @@ def _calculate_rolling_stats(matches, window=5):
         "away_goals": "goals_for", "home_goals": "goals_against"
     })
     
-    # Calculate Points for each row
-    # Home team points
+    # Calculate Points
     home["points"] = home.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
-    # Away team points (logic is same because we renamed cols to goals_for/against)
     away["points"] = away.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
 
     team_stats = pd.concat([home, away]).sort_values(["team", "date"])
     team_stats = team_stats.reset_index(drop=True)
     
+    # --- NEW: Calculate Rest Days ---
+    # Calculate difference in days from the previous row for the same team
+    team_stats["rest_days"] = team_stats.groupby("team")["date"].diff().dt.days
+    # Fill NaN (first match of season) with 7 days (assuming fully rested)
+    team_stats["rest_days"] = team_stats["rest_days"].fillna(7)
+
     # 2. Calculate Rolling Averages
-    # Added "points" to the list
     features = ["shots", "xg", "sot", "points"]
     
     grouped = team_stats.groupby("team")[features]
@@ -45,7 +47,8 @@ def _calculate_rolling_stats(matches, window=5):
     rolling.columns = [f"roll_{c}" for c in rolling.columns]
     
     # 3. Combine back
-    team_stats_final = pd.concat([team_stats[["match_id", "team"]], rolling], axis=1)
+    # We include "rest_days" here so it gets merged back to the main table
+    team_stats_final = pd.concat([team_stats[["match_id", "team", "rest_days"]], rolling], axis=1)
     
     return team_stats_final
 
@@ -79,7 +82,8 @@ def preprocess_data(df):
         "roll_shots": "home_roll_shots", 
         "roll_xg": "home_roll_xg", 
         "roll_sot": "home_roll_sot",
-        "roll_points": "home_roll_points" # <--- NEW
+        "roll_points": "home_roll_points",
+        "rest_days": "home_rest_days"   # <--- NEW
     })
     matches.drop(columns=["team"], inplace=True)
     
@@ -89,7 +93,8 @@ def preprocess_data(df):
         "roll_shots": "away_roll_shots", 
         "roll_xg": "away_roll_xg", 
         "roll_sot": "away_roll_sot",
-        "roll_points": "away_roll_points" # <--- NEW
+        "roll_points": "away_roll_points",
+        "rest_days": "away_rest_days"   # <--- NEW
     })
     matches.drop(columns=["team"], inplace=True)
 

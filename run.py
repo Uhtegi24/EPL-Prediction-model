@@ -36,8 +36,8 @@ def main():
     # 2. Define Features
     # We ONLY use the rolling features (history), not the current match stats
     features = [
-        "home_roll_shots", "home_roll_xg", "home_roll_sot", "home_roll_points",
-        "away_roll_shots", "away_roll_xg", "away_roll_sot", "away_roll_points"
+        "home_roll_shots", "home_roll_xg", "home_roll_sot", "home_roll_points", "home_rest_days",
+        "away_roll_shots", "away_roll_xg", "away_roll_sot", "away_roll_points", "away_rest_days"
     ]
 
 if __name__ == "__main__":
