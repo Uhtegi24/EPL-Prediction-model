@@ -9,39 +9,42 @@ def _calculate_rolling_stats(matches, window=5):
     Internal helper to calculate rolling averages for teams.
     """
     # 1. Create a long view (one row per team per match)
-    # We take the stats we want to average
-    cols_h = ["match_id", "date", "home_team", "shots_h", "shot_xg_sum_h", "shots_on_target_h"]
-    cols_a = ["match_id", "date", "away_team", "shots_a", "shot_xg_sum_a", "shots_on_target_a"]
+    # We need to know the result to calculate points
+    cols_h = ["match_id", "date", "home_team", "shots_h", "shot_xg_sum_h", "shots_on_target_h", "home_goals", "away_goals"]
+    cols_a = ["match_id", "date", "away_team", "shots_a", "shot_xg_sum_a", "shots_on_target_a", "home_goals", "away_goals"]
     
     home = matches[cols_h].rename(columns={
-        "home_team": "team", "shots_h": "shots", "shot_xg_sum_h": "xg", "shots_on_target_h": "sot"
+        "home_team": "team", "shots_h": "shots", "shot_xg_sum_h": "xg", "shots_on_target_h": "sot",
+        "home_goals": "goals_for", "away_goals": "goals_against"
     })
+    
     away = matches[cols_a].rename(columns={
-        "away_team": "team", "shots_a": "shots", "shot_xg_sum_a": "xg", "shots_on_target_a": "sot"
+        "away_team": "team", "shots_a": "shots", "shot_xg_sum_a": "xg", "shots_on_target_a": "sot",
+        "away_goals": "goals_for", "home_goals": "goals_against"
     })
     
+    # Calculate Points for each row
+    # Home team points
+    home["points"] = home.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
+    # Away team points (logic is same because we renamed cols to goals_for/against)
+    away["points"] = away.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
+
     team_stats = pd.concat([home, away]).sort_values(["team", "date"])
-    
-    # FIX: Reset index to ensure uniqueness. 
-    # Without this, duplicate indices cause the "InvalidIndexError" during concat.
     team_stats = team_stats.reset_index(drop=True)
     
     # 2. Calculate Rolling Averages
-    # group by team -> shift 1 (exclude current game) -> rolling mean
-    features = ["shots", "xg", "sot"]
+    # Added "points" to the list
+    features = ["shots", "xg", "sot", "points"]
     
     grouped = team_stats.groupby("team")[features]
     rolling = grouped.apply(lambda x: x.shift(1).rolling(window=window, min_periods=1).mean())
     
-    # FIX: groupby.apply creates a MultiIndex (team, index). Drop 'team' level to align with team_stats.
     if isinstance(rolling.index, pd.MultiIndex):
         rolling = rolling.droplevel(0)
     
-    # Rename columns to indicate they are rolling averages
     rolling.columns = [f"roll_{c}" for c in rolling.columns]
     
-    # 3. Combine back to team_stats
-    # We drop the original 'current' stats to avoid leakage
+    # 3. Combine back
     team_stats_final = pd.concat([team_stats[["match_id", "team"]], rolling], axis=1)
     
     return team_stats_final
@@ -72,12 +75,22 @@ def preprocess_data(df):
     
     # Merge Home Stats
     matches = matches.merge(team_rolling, left_on=["match_id", "home_team"], right_on=["match_id", "team"], how="left")
-    matches = matches.rename(columns={"roll_shots": "home_roll_shots", "roll_xg": "home_roll_xg", "roll_sot": "home_roll_sot"})
+    matches = matches.rename(columns={
+        "roll_shots": "home_roll_shots", 
+        "roll_xg": "home_roll_xg", 
+        "roll_sot": "home_roll_sot",
+        "roll_points": "home_roll_points" # <--- NEW
+    })
     matches.drop(columns=["team"], inplace=True)
     
     # Merge Away Stats
     matches = matches.merge(team_rolling, left_on=["match_id", "away_team"], right_on=["match_id", "team"], how="left")
-    matches = matches.rename(columns={"roll_shots": "away_roll_shots", "roll_xg": "away_roll_xg", "roll_sot": "away_roll_sot"})
+    matches = matches.rename(columns={
+        "roll_shots": "away_roll_shots", 
+        "roll_xg": "away_roll_xg", 
+        "roll_sot": "away_roll_sot",
+        "roll_points": "away_roll_points" # <--- NEW
+    })
     matches.drop(columns=["team"], inplace=True)
 
     # --- STEP 3: Create Target ---
