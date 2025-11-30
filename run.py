@@ -1,7 +1,7 @@
 import os
 
 try:
-    from src.epl_prediction.data import load_data, preprocess_data
+    from src.data import load_data, preprocess_data
 except ImportError:
     from src.data import load_data, preprocess_data
 
