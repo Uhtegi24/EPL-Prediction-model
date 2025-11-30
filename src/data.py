@@ -8,7 +8,7 @@ def _calculate_rolling_stats(matches, window=5):
     """
     Internal helper to calculate rolling averages for teams.
     """
-    # 1. Create a long view (one row per team per match)
+    # create a long view (one row per team per match)
     cols_h = ["match_id", "date", "home_team", "shots_h", "shot_xg_sum_h", "shots_on_target_h", "home_goals", "away_goals"]
     cols_a = ["match_id", "date", "away_team", "shots_a", "shot_xg_sum_a", "shots_on_target_a", "home_goals", "away_goals"]
     
@@ -22,21 +22,22 @@ def _calculate_rolling_stats(matches, window=5):
         "away_goals": "goals_for", "home_goals": "goals_against"
     })
     
-    # Calculate Points
+    home["is_home"] = True
+    away["is_home"] = False
+
+    # calculate Points
     home["points"] = home.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
     away["points"] = away.apply(lambda x: 3 if x.goals_for > x.goals_against else (1 if x.goals_for == x.goals_against else 0), axis=1)
 
     team_stats = pd.concat([home, away]).sort_values(["team", "date"])
     team_stats = team_stats.reset_index(drop=True)
     
-    # --- NEW: Calculate Rest Days ---
-    # Calculate difference in days from the previous row for the same team
+    # calculate Rest Days
     team_stats["rest_days"] = team_stats.groupby("team")["date"].diff().dt.days
-    # Fill NaN (first match of season) with 7 days (assuming fully rested)
     team_stats["rest_days"] = team_stats["rest_days"].fillna(7)
 
-    # 2. Calculate Rolling Averages
-    features = ["shots", "xg", "sot", "points"]
+    # calculate General Rolling Averages
+    features = ["shots", "xg", "sot", "points", "goals_against", "goals_for"]
     
     grouped = team_stats.groupby("team")[features]
     rolling = grouped.apply(lambda x: x.shift(1).rolling(window=window, min_periods=1).mean())
@@ -46,16 +47,32 @@ def _calculate_rolling_stats(matches, window=5):
     
     rolling.columns = [f"roll_{c}" for c in rolling.columns]
     
-    # 3. Combine back
-    # We include "rest_days" here so it gets merged back to the main table
-    team_stats_final = pd.concat([team_stats[["match_id", "team", "rest_days"]], rolling], axis=1)
+    # group by Team, Venue 
+    venue_features = ["points", "goals_for", "goals_against"]
+    grouped_venue = team_stats.groupby(["team", "is_home"])[venue_features]
+    
+    # must shift(1) to ensure we only look at PAST games
+    rolling_venue = grouped_venue.apply(lambda x: x.shift(1).rolling(window=window, min_periods=1).mean())
+    
+    # drop the extra index levels created by groupby
+    if isinstance(rolling_venue.index, pd.MultiIndex):
+        rolling_venue = rolling_venue.droplevel([0, 1])
+    
+    rolling_venue.columns = [f"roll_venue_{c}" for c in rolling_venue.columns]
+
+    # combine everything
+    team_stats_final = pd.concat([
+        team_stats[["match_id", "team", "rest_days", "is_home"]], 
+        rolling, 
+        rolling_venue
+    ], axis=1)
     
     return team_stats_final
 
 def preprocess_data(df):
     print("Preprocessing data...")
     
-    # --- STEP 1: Basic Aggregation (Same as before) ---
+    # Aggregations
     agg = df.groupby(["match_id", "h_a"]).agg(
         shots=("result", "count"),
         shot_xg_sum=("xG", "sum"),
@@ -72,33 +89,62 @@ def preprocess_data(df):
 
     matches = match_static.merge(pivot, on="match_id", how="left").fillna(0)
 
-    # --- STEP 2: Add Rolling Features (The New Part) ---
+    # add rolling features
     print("Calculating rolling averages (last 5 games)...")
     team_rolling = _calculate_rolling_stats(matches, window=5)
     
-    # Merge Home Stats
-    matches = matches.merge(team_rolling, left_on=["match_id", "home_team"], right_on=["match_id", "team"], how="left")
+    
+    # merge Home Stats
+    home_stats = team_rolling[team_rolling["is_home"] == True]
+    matches = matches.merge(home_stats, left_on=["match_id", "home_team"], right_on=["match_id", "team"], how="left")
+    
     matches = matches.rename(columns={
         "roll_shots": "home_roll_shots", 
         "roll_xg": "home_roll_xg", 
         "roll_sot": "home_roll_sot",
         "roll_points": "home_roll_points",
-        "rest_days": "home_rest_days"   # <--- NEW
+        "roll_goals_against": "home_roll_goals_conceded",
+        "roll_goals_for": "home_roll_goals_scored", # New
+        "rest_days": "home_rest_days",
+        "roll_venue_points": "home_venue_points",
+        "roll_venue_goals_for": "home_venue_goals_scored",
+        "roll_venue_goals_against": "home_venue_goals_conceded"
     })
-    matches.drop(columns=["team"], inplace=True)
+    matches.drop(columns=["team", "is_home"], inplace=True)
+
+    # If Home Venue stats are NaN, use General Home stats
+    cols_venue = ["home_venue_points", "home_venue_goals_scored", "home_venue_goals_conceded"]
+    cols_general = ["home_roll_points", "home_roll_goals_scored", "home_roll_goals_conceded"]
     
+    for v_col, g_col in zip(cols_venue, cols_general):
+        matches[v_col] = matches[v_col].fillna(matches[g_col])
+
     # Merge Away Stats
-    matches = matches.merge(team_rolling, left_on=["match_id", "away_team"], right_on=["match_id", "team"], how="left")
+    away_stats = team_rolling[team_rolling["is_home"] == False]
+    matches = matches.merge(away_stats, left_on=["match_id", "away_team"], right_on=["match_id", "team"], how="left")
+    
     matches = matches.rename(columns={
         "roll_shots": "away_roll_shots", 
         "roll_xg": "away_roll_xg", 
         "roll_sot": "away_roll_sot",
         "roll_points": "away_roll_points",
-        "rest_days": "away_rest_days"   # <--- NEW
+        "roll_goals_against": "away_roll_goals_conceded",
+        "roll_goals_for": "away_roll_goals_scored",
+        "rest_days": "away_rest_days",
+        "roll_venue_points": "away_venue_points",
+        "roll_venue_goals_for": "away_venue_goals_scored",
+        "roll_venue_goals_against": "away_venue_goals_conceded"
     })
-    matches.drop(columns=["team"], inplace=True)
+    matches.drop(columns=["team", "is_home"], inplace=True)
 
-    # --- STEP 3: Create Target ---
+    # If Away Venue stats are NaN, use General Away stats
+    cols_venue_a = ["away_venue_points", "away_venue_goals_scored", "away_venue_goals_conceded"]
+    cols_general_a = ["away_roll_points", "away_roll_goals_scored", "away_roll_goals_conceded"]
+    
+    for v_col, g_col in zip(cols_venue_a, cols_general_a):
+        matches[v_col] = matches[v_col].fillna(matches[g_col])
+
+    # Create Target
     def get_outcome(row):
         if row["home_goals"] > row["away_goals"]: return "home"
         elif row["home_goals"] == row["away_goals"]: return "draw"
@@ -106,7 +152,7 @@ def preprocess_data(df):
     
     matches["outcome"] = matches.apply(get_outcome, axis=1)
     
-    # Drop the first few rows where rolling stats are NaN (start of season/dataset)
+    # drop rows where we don't have enough history yet
     matches.dropna(subset=["home_roll_shots", "away_roll_shots"], inplace=True)
     
     return matches
