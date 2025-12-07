@@ -3,3 +3,4 @@ scikit-learn
 matplotlib
 ipykernel
 xgboost
+catboost
