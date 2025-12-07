@@ -4,7 +4,7 @@ def load_data(filepath):
     print(f"Loading data from {filepath}...")
     return pd.read_csv(filepath, parse_dates=['date'])
 
-def _calculate_rolling_stats(matches, window=5):
+def _calculate_rolling_stats(matches, window=10):
     """
     Internal helper to calculate rolling averages for teams.
     """
@@ -134,8 +134,8 @@ def preprocess_data(df):
     matches = match_static.merge(pivot, on="match_id", how="left").fillna(0)
 
     # add rolling features
-    print("Calculating rolling averages (last 5 games)...")
-    team_rolling = _calculate_rolling_stats(matches, window=5)
+    print("Calculating rolling averages (last 10 games)...")
+    team_rolling = _calculate_rolling_stats(matches, window=10)
     
     matches = _merge_team_stats(matches, team_rolling, "home")
     matches = _merge_team_stats(matches, team_rolling, "away")

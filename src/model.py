@@ -91,6 +91,7 @@ class MatchOutcomeModel:
                 colsample_bytree=0.9,
                 random_state=self.random_state,
                 n_jobs=-1,
+                num_class=3,
                 **kwargs,
             )
         else:
@@ -106,9 +107,11 @@ class MatchOutcomeModel:
 
     def predict(self, X: pd.DataFrame):
         """
-        Predict class labels (home/draw/away).
+        Predict class labels (home/draw/away) for both RF and XGB.
+        Uses predict_proba + argmax so behaviour is consistent.
         """
-        y_pred_enc = self.model.predict(X)
+        proba = self.model.predict_proba(X)
+        y_pred_enc = proba.argmax(axis=1)
         return self.le.inverse_transform(y_pred_enc)
 
     def predict_proba(self, X: pd.DataFrame) -> pd.DataFrame:
